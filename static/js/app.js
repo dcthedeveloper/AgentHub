@@ -381,6 +381,60 @@ const UI = {
         `).join('');
     },
     
+    // Render transaction volume chart
+    renderVolumeChart(blockchain) {
+        const container = document.getElementById('volumeChart');
+        
+        // Extract transaction data from blockchain
+        const transactions = blockchain.chain
+            .filter(block => block.data.type === 'payment_released')
+            .map(block => ({
+                timestamp: new Date(block.timestamp),
+                amount: block.data.amount || 0,
+                date: new Date(block.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+            }));
+        
+        if (transactions.length === 0) {
+            container.innerHTML = '<div style="text-align: center; padding: 3rem; color: var(--color-text-secondary);">No transactions yet</div>';
+            return;
+        }
+        
+        // Group by date and sum amounts
+        const volumeByDate = {};
+        transactions.forEach(tx => {
+            if (!volumeByDate[tx.date]) {
+                volumeByDate[tx.date] = 0;
+            }
+            volumeByDate[tx.date] += tx.amount;
+        });
+        
+        // Convert to array and sort by date
+        const chartData = Object.entries(volumeByDate)
+            .map(([date, amount]) => ({ date, amount }))
+            .slice(-7); // Show last 7 data points
+        
+        // Find max for scaling
+        const maxAmount = Math.max(...chartData.map(d => d.amount));
+        
+        // Render chart
+        container.innerHTML = `
+            <div class="volume-chart">
+                ${chartData.map(data => {
+                    const height = (data.amount / maxAmount) * 100;
+                    return `
+                        <div class="chart-bar-wrapper">
+                            <div class="chart-bar-value">${data.amount}</div>
+                            <div class="chart-bar" style="height: ${height}%">
+                                <div class="chart-bar-fill"></div>
+                            </div>
+                            <div class="chart-bar-label">${data.date}</div>
+                        </div>
+                    `;
+                }).join('')}
+            </div>
+        `;
+    },
+    
     // Render activity feed
     renderActivityFeed(blockchain) {
         const container = document.getElementById('activityFeed');
@@ -626,6 +680,7 @@ async function fetchAndUpdateData() {
         UI.renderAgents(state.agents, state.filters);
         UI.renderBlockchain(blockchain);
         UI.renderLeaderboard(state.agents);
+        UI.renderVolumeChart(blockchain);
         UI.renderActivityFeed(blockchain);
         
     } catch (error) {

@@ -4,6 +4,8 @@
 
 class ChatAssistant {
     constructor() {
+        console.log('ChatAssistant: Initializing...');
+        
         this.chatToggle = document.getElementById('chatToggle');
         this.chatWindow = document.getElementById('chatWindow');
         this.chatClose = document.getElementById('chatClose');
@@ -11,23 +13,44 @@ class ChatAssistant {
         this.chatInput = document.getElementById('chatInput');
         this.chatSend = document.getElementById('chatSend');
         
+        if (!this.chatToggle) {
+            console.error('ChatAssistant: chatToggle button not found!');
+            return;
+        }
+        
+        console.log('ChatAssistant: Elements found, setting up listeners...');
         this.isOpen = false;
         this.init();
     }
     
     init() {
-        this.chatToggle.addEventListener('click', () => this.toggleChat());
-        this.chatClose.addEventListener('click', () => this.toggleChat());
+        this.chatToggle.addEventListener('click', (e) => {
+            console.log('ChatAssistant: Toggle clicked');
+            e.preventDefault();
+            this.toggleChat();
+        });
+        
+        this.chatClose.addEventListener('click', (e) => {
+            console.log('ChatAssistant: Close clicked');
+            e.preventDefault();
+            this.toggleChat();
+        });
         
         this.chatSend.addEventListener('click', () => this.sendMessage());
         this.chatInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') this.sendMessage();
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                this.sendMessage();
+            }
         });
+        
+        console.log('ChatAssistant: Initialized successfully');
     }
     
     toggleChat() {
         this.isOpen = !this.isOpen;
         this.chatWindow.classList.toggle('hidden');
+        console.log('ChatAssistant: Chat toggled, isOpen =', this.isOpen);
         
         if (this.isOpen) {
             this.chatInput.focus();
@@ -37,6 +60,8 @@ class ChatAssistant {
     async sendMessage() {
         const message = this.chatInput.value.trim();
         if (!message) return;
+        
+        console.log('ChatAssistant: Sending message:', message);
         
         // Add user message
         this.addMessage(message, 'user');
@@ -54,6 +79,7 @@ class ChatAssistant {
             });
             
             const data = await response.json();
+            console.log('ChatAssistant: Response received:', data);
             
             // Remove typing indicator
             this.removeTypingIndicator(typingId);
@@ -61,8 +87,11 @@ class ChatAssistant {
             // Add assistant response
             if (data.response) {
                 this.addMessage(data.response, 'assistant');
+            } else {
+                this.addMessage('Sorry, I encountered an error. Please try again.', 'assistant');
             }
         } catch (error) {
+            console.error('ChatAssistant: Error:', error);
             this.removeTypingIndicator(typingId);
             this.addMessage('Sorry, I encountered an error. Please try again.', 'assistant');
         }
@@ -109,125 +138,8 @@ class ChatAssistant {
 }
 
 // Initialize chat when DOM is ready
+console.log('chat.js: Script loaded');
 document.addEventListener('DOMContentLoaded', () => {
-    new ChatAssistant();
+    console.log('chat.js: DOM ready, creating ChatAssistant');
+    window.chatAssistant = new ChatAssistant();
 });
-                this.addMessage(data.response, 'assistant');
-                
-                // Update suggestions
-                if (data.suggestions && data.suggestions.length > 0) {
-                    this.updateSuggestions(data.suggestions);
-                }
-            } else {
-                this.addMessage('Sorry, I encountered an error. Please try again.', 'assistant', true);
-            }
-            
-        } catch (error) {
-            console.error('Chat error:', error);
-            this.hideTyping();
-            this.addMessage('Sorry, I\'m having trouble connecting. Please try again.', 'assistant', true);
-        }
-    }
-    
-    addMessage(text, sender, isError = false) {
-        const messageDiv = document.createElement('div');
-        messageDiv.className = `chat-message ${sender}`;
-        if (isError) messageDiv.classList.add('error');
-        
-        const avatar = document.createElement('div');
-        avatar.className = 'message-avatar';
-        avatar.textContent = sender === 'user' ? 'You' : 'AI';
-        
-        const content = document.createElement('div');
-        content.className = 'message-content';
-        
-        // Convert markdown-like formatting to HTML
-        const formattedText = this.formatMessage(text);
-        content.innerHTML = formattedText;
-        
-        messageDiv.appendChild(avatar);
-        messageDiv.appendChild(content);
-        
-        this.chatMessages.appendChild(messageDiv);
-        this.scrollToBottom();
-    }
-    
-    formatMessage(text) {
-        // Convert newlines to <br>
-        text = text.replace(/\n/g, '<br>');
-        
-        // Convert bullet points
-        text = text.replace(/^•\s/gm, '<br>• ');
-        
-        // Convert bold **text**
-        text = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-        
-        // Convert inline code `code`
-        text = text.replace(/`(.*?)`/g, '<code>$1</code>');
-        
-        return text;
-    }
-    
-    showTyping() {
-        this.isTyping = true;
-        const typingDiv = document.createElement('div');
-        typingDiv.className = 'chat-message assistant typing-indicator';
-        typingDiv.id = 'typingIndicator';
-        
-        const avatar = document.createElement('div');
-        avatar.className = 'message-avatar';
-        avatar.textContent = 'AI';
-        
-        const content = document.createElement('div');
-        content.className = 'message-content';
-        content.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
-        
-        typingDiv.appendChild(avatar);
-        typingDiv.appendChild(content);
-        
-        this.chatMessages.appendChild(typingDiv);
-        this.scrollToBottom();
-    }
-    
-    hideTyping() {
-        this.isTyping = false;
-        const typingIndicator = document.getElementById('typingIndicator');
-        if (typingIndicator) {
-            typingIndicator.remove();
-        }
-    }
-    
-    updateSuggestions(suggestions) {
-        this.chatSuggestions.innerHTML = '';
-        
-        suggestions.slice(0, 3).forEach(suggestion => {
-            const btn = document.createElement('button');
-            btn.className = 'suggestion-btn';
-            btn.setAttribute('data-message', suggestion);
-            btn.textContent = suggestion;
-            this.chatSuggestions.appendChild(btn);
-        });
-    }
-    
-    scrollToBottom() {
-        this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
-    }
-    
-    getContext() {
-        // Get current page context
-        const activeSection = document.querySelector('[id]:target');
-        return {
-            page: activeSection ? activeSection.id : 'marketplace',
-            timestamp: new Date().toISOString()
-        };
-    }
-}
-
-// Initialize chat assistant when DOM is ready
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-        new ChatAssistant();
-    });
-} else {
-    new ChatAssistant();
-}

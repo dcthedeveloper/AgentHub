@@ -33,8 +33,11 @@ except Exception as e:
 
 # Initialize AI assistant
 try:
-    ai_assistant = get_assistant(use_gpu=False)
-    print("✅ AI Assistant initialized")
+    # Temporarily disabled for faster demo startup
+    # ai_assistant = get_assistant(use_gpu=False)
+    # print("✅ AI Assistant initialized")
+    ai_assistant = None
+    print("ℹ️  AI Assistant disabled for fast demo startup")
 except Exception as e:
     print(f"⚠️  AI Assistant initialization warning: {e}")
     ai_assistant = None
@@ -53,6 +56,132 @@ agents = {
 # Register agents
 for agent in agents.values():
     marketplace.register_agent(agent)
+
+
+# ============================================================================
+# POPULATE WITH DEMO DATA
+# ============================================================================
+
+def populate_demo_data():
+    """Populate marketplace with realistic demo transactions"""
+    print("\n📊 Populating demo data...")
+    
+    demo_jobs = [
+        {
+            'poster': 'ResearchBot',
+            'description': 'Analyze customer satisfaction survey data from Q3 2025 (500+ responses)',
+            'type': 'data_analysis',
+            'budget': 45,
+            'winner': 'DataAnalystAgent',
+            'quality': 88
+        },
+        {
+            'poster': 'ResearchBot',
+            'description': 'Create professional product images for new smartwatch launch',
+            'type': 'image_generation',
+            'budget': 35,
+            'winner': 'ImageGenAgent',
+            'quality': 92
+        },
+        {
+            'poster': 'ResearchBot',
+            'description': 'Write SEO-optimized blog post about AI agents in enterprise (1500 words)',
+            'type': 'content_writing',
+            'budget': 50,
+            'winner': 'ContentWriterAI',
+            'quality': 85
+        },
+        {
+            'poster': 'ResearchBot',
+            'description': 'Review Python codebase for security vulnerabilities and best practices',
+            'type': 'code_review',
+            'budget': 60,
+            'winner': 'CodeReviewBot',
+            'quality': 95
+        },
+        {
+            'poster': 'ResearchBot',
+            'description': 'Perform sentiment analysis on 10,000 social media mentions',
+            'type': 'data_analysis',
+            'budget': 40,
+            'winner': 'DataAnalystAgent',
+            'quality': 90
+        },
+    ]
+    
+    for job in demo_jobs:
+        try:
+            # Run a complete job cycle silently
+            poster = marketplace.agents[job['poster']]
+            winner = marketplace.agents[job['winner']]
+            
+            # Deduct budget from poster
+            poster.balance -= job['budget']
+            poster.total_spent += job['budget']
+            poster.jobs_requested += 1
+            
+            # Create smart contract
+            contract_id = smart_contract_system.create_contract(
+                buyer_id=job['poster'],
+                seller_id=job['winner'],
+                job_description=job['description'],
+                amount=job['budget']
+            )
+            
+            # Simulate work completion and validation
+            validation_result = {
+                'score': job['quality'],
+                'confidence': 0.95,
+                'passed': job['quality'] >= 70,
+                'breakdown': {
+                    'quality': job['quality'],
+                    'similarity': job['quality'] - 5,
+                    'completeness': job['quality'] + 3,
+                    'classification': 90
+                }
+            }
+            
+            # Add to validator history
+            validator.validation_history.append(validation_result)
+            
+            # Release payment if quality met
+            if validation_result['passed']:
+                winner.balance += job['budget']
+                winner.total_earned += job['budget']
+                winner.jobs_completed += 1
+                winner.update_reputation(job['quality'] / 20)  # Convert to 0-5 scale
+                
+                # Validate and release through smart contract
+                smart_contract_system.validate_and_release(
+                    contract_id=contract_id,
+                    quality_score=job['quality'],
+                    validator_id='MLValidator'
+                )
+                
+                # Add to completed jobs
+                marketplace.completed_jobs.append({
+                    'job_id': f"demo_{len(marketplace.completed_jobs)}",
+                    'poster': job['poster'],
+                    'winner': job['winner'],
+                    'description': job['description'],
+                    'type': job['type'],
+                    'budget': job['budget'],
+                    'final_price': job['budget'],
+                    'quality_score': job['quality'],
+                    'status': 'completed'
+                })
+        
+        except Exception as e:
+            print(f"   ⚠️  Error populating demo job: {e}")
+            continue
+    
+    print(f"✅ Demo data populated: {len(demo_jobs)} completed transactions")
+    print(f"   💰 Total transaction volume: {sum(j['budget'] for j in demo_jobs)} tokens")
+    print(f"   ⭐ Average quality score: {sum(j['quality'] for j in demo_jobs) / len(demo_jobs):.1f}/100")
+    print()
+
+# Populate demo data on startup
+populate_demo_data()
 
 
 # ============================================================================
@@ -456,4 +585,5 @@ if __name__ == '__main__':
     print("\n💡 Award-winning UI/UX combining Upwork + Fiverr best practices")
     print("="*80 + "\n")
     
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    # Use debug=False to prevent auto-restart issues during demo
+    app.run(debug=False, host='0.0.0.0', port=5001)
