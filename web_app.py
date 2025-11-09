@@ -1,0 +1,459 @@
+"""
+AgentHub Web Application
+Award-winning UI/UX combining Upwork's professionalism with Fiverr's visual appeal
+"""
+
+from flask import Flask, render_template, jsonify, request
+from flask_cors import CORS
+from blockchain import Blockchain
+from smart_contract import SmartContract
+from marketplace import Marketplace
+from agent import Agent
+from ai_validator import AIValidator  # Legacy validator
+from ml_validator import get_validator  # New ML-powered validator
+from ai_assistant import get_assistant  # AI chat assistant
+import threading
+import time
+from datetime import datetime
+
+app = Flask(__name__)
+CORS(app)
+
+# Initialize core systems
+blockchain = Blockchain()
+smart_contract_system = SmartContract(blockchain)
+
+# Try to use ML validator, fallback to legacy if models not installed
+try:
+    validator = get_validator(use_gpu=False)
+    print("✅ Using ML-powered validator with transformer models")
+except Exception as e:
+    print(f"⚠️  ML validator failed, using legacy validator: {e}")
+    validator = AIValidator()
+
+# Initialize AI assistant
+try:
+    ai_assistant = get_assistant(use_gpu=False)
+    print("✅ AI Assistant initialized")
+except Exception as e:
+    print(f"⚠️  AI Assistant initialization warning: {e}")
+    ai_assistant = None
+
+marketplace = Marketplace(blockchain, smart_contract_system, validator)
+
+# Initialize demo agents
+agents = {
+    'ResearchBot': Agent('ResearchBot', agent_type='buyer', skills=[], initial_balance=200),
+    'DataAnalystAgent': Agent('DataAnalystAgent', agent_type='seller', skills=['data_analysis', 'validation'], initial_balance=50),
+    'ImageGenAgent': Agent('ImageGenAgent', agent_type='seller', skills=['image_generation', 'validation'], initial_balance=50),
+    'CodeReviewBot': Agent('CodeReviewBot', agent_type='seller', skills=['code_review', 'testing'], initial_balance=75),
+    'ContentWriterAI': Agent('ContentWriterAI', agent_type='seller', skills=['content_writing', 'seo'], initial_balance=60),
+}
+
+# Register agents
+for agent in agents.values():
+    marketplace.register_agent(agent)
+
+
+# ============================================================================
+# API ENDPOINTS
+# ============================================================================
+
+@app.route('/')
+def index():
+    """Main dashboard"""
+    return render_template('index.html')
+
+@app.route('/how-it-works')
+def how_it_works():
+    """How It Works page"""
+    return render_template('how_it_works.html')
+
+@app.route('/api/stats')
+def get_stats():
+    """Get marketplace statistics"""
+    total_transactions = len(blockchain.chain) - 1  # Exclude genesis block
+    total_value = sum(
+        block['data'].get('amount', 0) 
+        for block in blockchain.chain 
+        if block['data'].get('type') == 'payment_released'
+    )
+    
+    completed_jobs = marketplace.completed_jobs
+    active_jobs = marketplace.active_jobs
+    
+    avg_quality = 0
+    if validator.validation_history:
+        avg_quality = sum(v['score'] for v in validator.validation_history) / len(validator.validation_history)
+    
+    return jsonify({
+        'total_agents': len(marketplace.agents),
+        'total_transactions': total_transactions,
+        'total_value': round(total_value, 2),
+        'completed_jobs': len(completed_jobs),
+        'active_jobs': len(active_jobs),
+        'avg_quality_score': round(avg_quality, 1),
+        'blockchain_valid': blockchain.is_valid(),
+        'total_blocks': len(blockchain.chain)
+    })
+
+@app.route('/api/agents')
+def get_agents():
+    """Get all agents with their stats"""
+    agent_list = []
+    for agent_id, agent in marketplace.agents.items():
+        agent_data = {
+            'id': agent_id,
+            'type': agent.agent_type,
+            'balance': agent.balance,
+            'reputation': round(agent.reputation_score, 2),
+            'jobs_completed': agent.jobs_completed,
+            'jobs_requested': agent.jobs_requested,
+            'total_earned': agent.total_earned,
+            'total_spent': agent.total_spent,
+            'skills': agent.skills,
+            'pricing': agent.pricing if hasattr(agent, 'pricing') else {},
+            'completion_rate': (agent.jobs_completed / max(agent.jobs_requested, 1)) * 100 if agent.agent_type == 'buyer' else 100.0,
+            'available': agent.agent_type == 'seller'
+        }
+        agent_list.append(agent_data)
+    
+    return jsonify({'agents': agent_list})
+
+@app.route('/api/agents/<agent_id>')
+def get_agent(agent_id):
+    """Get detailed agent information"""
+    if agent_id not in marketplace.agents:
+        return jsonify({'error': 'Agent not found'}), 404
+    
+    agent = marketplace.agents[agent_id]
+    
+    # Get agent's transaction history from blockchain
+    transactions = []
+    for block in blockchain.chain[1:]:  # Skip genesis
+        data = block['data']
+        if data.get('buyer') == agent_id or data.get('seller') == agent_id:
+            transactions.append({
+                'type': data.get('type'),
+                'timestamp': block['timestamp'],
+                'amount': data.get('amount', 0),
+                'quality_score': data.get('quality_score'),
+                'counterparty': data.get('seller') if data.get('buyer') == agent_id else data.get('buyer'),
+                'job': data.get('job', '')
+            })
+    
+    return jsonify({
+        'id': agent_id,
+        'type': agent.agent_type,
+        'balance': agent.balance,
+        'reputation': round(agent.reputation_score, 2),
+        'jobs_completed': agent.jobs_completed,
+        'jobs_requested': agent.jobs_requested,
+        'total_earned': agent.total_earned,
+        'total_spent': agent.total_spent,
+        'skills': agent.skills,
+        'pricing': agent.pricing if hasattr(agent, 'pricing') else {},
+        'transactions': transactions
+    })
+
+@app.route('/api/blockchain')
+def get_blockchain():
+    """Get blockchain data"""
+    return jsonify({
+        'chain': blockchain.chain,
+        'length': len(blockchain.chain),
+        'valid': blockchain.is_valid()
+    })
+
+@app.route('/api/blockchain/stats')
+def get_blockchain_stats():
+    """Get blockchain statistics by agent"""
+    stats = blockchain.get_agent_stats()
+    return jsonify({'stats': stats})
+
+@app.route('/api/jobs')
+def get_jobs():
+    """Get all jobs"""
+    active = [job for job in marketplace.active_jobs]
+    completed = [job for job in marketplace.completed_jobs]
+    
+    return jsonify({
+        'active': active,
+        'completed': completed
+    })
+
+@app.route('/api/jobs/create', methods=['POST'])
+def create_job():
+    """Create a new job"""
+    data = request.json
+    
+    try:
+        buyer_id = data['buyer_id']
+        buyer_agent = marketplace.agents.get(buyer_id)
+        
+        if not buyer_agent:
+            return jsonify({'success': False, 'error': 'Buyer not found'}), 404
+        
+        job_id = marketplace.post_job(
+            poster_agent=buyer_agent,
+            job_description=data['description'],
+            job_type=data['job_type'],
+            budget=data['budget']
+        )
+        
+        return jsonify({
+            'success': True,
+            'job_id': job_id,
+            'message': 'Job posted successfully'
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 400
+
+@app.route('/api/jobs/<job_id>/execute', methods=['POST'])
+def execute_job(job_id):
+    """Execute a job (collect bids and execute)"""
+    try:
+        # This will collect bids, select winner, and execute
+        result = marketplace.execute_job(job_id)
+        
+        return jsonify({
+            'success': True,
+            'result': result
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 400
+
+@app.route('/api/contracts')
+def get_contracts():
+    """Get all smart contracts"""
+    contracts = []
+    for contract_id, contract in smart_contract_system.contracts.items():
+        contracts.append({
+            'id': contract_id,
+            'buyer': contract['buyer'],
+            'seller': contract['seller'],
+            'amount': contract['amount'],
+            'job': contract['job'],
+            'status': contract['status'],
+            'created_at': contract['created_at']
+        })
+    
+    return jsonify({'contracts': contracts})
+
+@app.route('/api/validator/stats')
+def get_validator_stats():
+    """Get AI validator statistics"""
+    total = len(validator.validation_history)
+    passed = sum(1 for v in validator.validation_history if v['passed'])
+    avg_score = sum(v['score'] for v in validator.validation_history) / total if total > 0 else 0
+    
+    return jsonify({
+        'total_validations': total,
+        'passed': passed,
+        'failed': total - passed,
+        'pass_rate': (passed / total * 100) if total > 0 else 0,
+        'average_score': round(avg_score, 1),
+        'recent_validations': validator.validation_history[-10:]  # Last 10
+    })
+
+
+@app.route('/api/demo/run', methods=['POST'])
+def run_demo_transaction():
+    """Run a demo transaction"""
+    import random
+    
+    job_types = {
+        'data_analysis': [
+            'Analyze customer satisfaction survey data',
+            'Perform sentiment analysis on social media',
+            'Process financial market trends'
+        ],
+        'image_generation': [
+            'Generate product visualization',
+            'Create marketing campaign imagery',
+            'Design social media graphics'
+        ],
+        'code_review': [
+            'Review backend API implementation',
+            'Audit security vulnerabilities',
+            'Optimize database queries'
+        ],
+        'content_writing': [
+            'Write product description',
+            'Create blog post on AI trends',
+            'Draft email marketing campaign'
+        ]
+    }
+    
+    try:
+        # Random job type
+        job_type = random.choice(list(job_types.keys()))
+        description = random.choice(job_types[job_type])
+        budget = random.randint(10, 25)
+        
+        # Get ResearchBot
+        buyer = marketplace.agents.get('ResearchBot')
+        if not buyer:
+            return jsonify({'success': False, 'error': 'ResearchBot not found'}), 404
+        
+        # Post job
+        job_id = marketplace.post_job(buyer, description, job_type, budget)
+        
+        if not job_id:
+            return jsonify({'success': False, 'error': 'Failed to post job'}), 400
+        
+        # Collect bids
+        bids = marketplace.collect_bids(job_id)
+        
+        if not bids:
+            return jsonify({'success': False, 'error': 'No agents available for this job type'}), 400
+        
+        # Select winner
+        winner_id = marketplace.select_winner(job_id)
+        
+        if not winner_id:
+            return jsonify({'success': False, 'error': 'No winner selected'}), 400
+        
+        # Execute job
+        result = marketplace.execute_job(job_id)
+        
+        if not result:
+            return jsonify({'success': False, 'error': 'Job execution failed'}), 500
+        
+        return jsonify({
+            'success': True,
+            'job_id': job_id,
+            'job_type': job_type,
+            'description': description,
+            'winner': winner_id,
+            'result': 'Transaction completed successfully!',
+            'message': f'Job {job_id} executed by {winner_id}: {description}'
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+# ============================================================================
+# DEMO MODE - Auto-generate transactions
+# ============================================================================
+
+def auto_generate_transactions():
+    """Background thread to generate demo transactions"""
+    import random
+    
+    job_types = {
+        'data_analysis': [
+            'Analyze customer satisfaction survey data',
+            'Perform sentiment analysis on social media',
+            'Process financial market trends',
+            'Generate quarterly sales report'
+        ],
+        'image_generation': [
+            'Generate product visualization',
+            'Create marketing campaign imagery',
+            'Design social media graphics',
+            'Generate brand logo concepts'
+        ],
+        'code_review': [
+            'Review backend API implementation',
+            'Audit security vulnerabilities',
+            'Optimize database queries',
+            'Review frontend performance'
+        ],
+        'content_writing': [
+            'Write product description',
+            'Create blog post on AI trends',
+            'Draft email marketing campaign',
+            'Write technical documentation'
+        ]
+    }
+    
+    while True:
+        time.sleep(15)  # Create a new job every 15 seconds
+        
+        try:
+            # Random job type
+            job_type = random.choice(list(job_types.keys()))
+            description = random.choice(job_types[job_type])
+            budget = random.randint(10, 25)
+            
+            # Post job from ResearchBot
+            job_id = marketplace.post_job('ResearchBot', job_type, description, budget)
+            
+            # Wait a bit then execute
+            time.sleep(2)
+            marketplace.execute_job(job_id)
+            
+        except Exception as e:
+            print(f"Demo transaction error: {e}")
+
+
+# ============================================================================
+# AI ASSISTANT ENDPOINTS
+# ============================================================================
+
+@app.route('/api/chat', methods=['POST'])
+def chat():
+    """Handle chat messages with AI assistant"""
+    try:
+        data = request.json
+        user_message = data.get('message', '')
+        context = data.get('context', {})
+        
+        if not user_message:
+            return jsonify({'error': 'No message provided'}), 400
+        
+        if ai_assistant:
+            response = ai_assistant.chat(user_message, context)
+            return jsonify(response)
+        else:
+            # Fallback response if assistant not available
+            return jsonify({
+                'response': 'AI Assistant is currently unavailable. Please check the documentation or contact support.',
+                'suggestions': ['View Documentation', 'Getting Started', 'Contact Support'],
+                'confidence': 0.3,
+                'source': 'fallback'
+            })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/chat/topics', methods=['GET'])
+def get_chat_topics():
+    """Get available help topics"""
+    try:
+        if ai_assistant:
+            topics = ai_assistant.get_help_topics()
+            return jsonify({'topics': topics})
+        else:
+            return jsonify({'topics': []})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# Start demo mode in background
+demo_thread = threading.Thread(target=auto_generate_transactions, daemon=True)
+# demo_thread.start()  # Uncomment to enable auto-generation
+
+
+if __name__ == '__main__':
+    print("\n" + "="*80)
+    print("🚀 AGENTHUB - AI AGENT MARKETPLACE")
+    print("="*80)
+    print("\n🌐 Starting web server...")
+    print("📍 Visit: http://localhost:5001")
+    print("\n💡 Award-winning UI/UX combining Upwork + Fiverr best practices")
+    print("="*80 + "\n")
+    
+    app.run(debug=True, host='0.0.0.0', port=5001)
