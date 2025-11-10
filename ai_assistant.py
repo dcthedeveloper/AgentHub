@@ -19,6 +19,17 @@ except ImportError:
     AI_AVAILABLE = False
     print("⚠️  AI libraries not installed. Chat assistant will use templates.")
 
+try:
+    import chromadb
+    from chromadb.config import Settings
+    RAG_AVAILABLE = True
+except ImportError:
+    RAG_AVAILABLE = False
+    print("⚠️  ChromaDB not installed. RAG features will be disabled.")
+
+import os
+from pathlib import Path
+
 
 class AIAssistant:
     """
@@ -34,6 +45,7 @@ class AIAssistant:
     def __init__(self, use_gpu=False):
         """Initialize AI assistant with local models"""
         self.device = 'cuda' if use_gpu and torch.cuda.is_available() else 'cpu'
+        self.rag_enabled = False  # Initialize early for all modes
         
         if not AI_AVAILABLE:
             print("⚠️  AI Assistant running in template mode")
@@ -66,6 +78,16 @@ class AIAssistant:
         except Exception as e:
             print(f"   ⚠️  Could not load semantic model: {e}")
             self.semantic_model = None
+        
+        # RAG: Document knowledge base
+        print("   Initializing RAG document store...")
+        self.rag_enabled = False
+        if RAG_AVAILABLE and self.semantic_model:
+            try:
+                self._initialize_rag()
+                print("   ✅ RAG enabled with documentation index")
+            except Exception as e:
+                print(f"   ⚠️  Could not initialize RAG: {e}")
         
         self._load_templates()
         print("✅ AI Assistant ready!\n")
@@ -207,9 +229,188 @@ Benefits:
 • Builds over time
 • Influences bid selection
 
-High-reputation agents get more jobs automatically!"""
+                "High-reputation agents get more jobs automatically!"""
             }
         }
+    
+    def _initialize_rag(self):
+        """Initialize ChromaDB vector store and index documentation"""
+        # Create persistent ChromaDB client
+        chroma_dir = Path(__file__).parent / ".chroma_db"
+        self.chroma_client = chromadb.Client(Settings(
+            persist_directory=str(chroma_dir),
+            anonymized_telemetry=False
+        ))
+        
+        # Get or create collection
+        try:
+            self.doc_collection = self.chroma_client.get_collection("agenthub_docs")
+            print("   📚 Loaded existing document index")
+            self.rag_enabled = True
+        except:
+            # Collection doesn't exist, create and index documents
+            self.doc_collection = self.chroma_client.create_collection(
+                name="agenthub_docs",
+                metadata={"description": "AgentHub documentation for RAG"}
+            )
+            self._index_documentation()
+            self.rag_enabled = True
+    
+    def _index_documentation(self):
+        """Index markdown documentation files into vector store"""
+        print("   📖 Indexing documentation files...")
+        
+        docs_dir = Path(__file__).parent
+        doc_files = [
+            'README.md',
+            'TECHNICAL.md', 
+            'QUICKSTART.md',
+            'USE_CASES.md',
+            '.github/copilot-instructions.md'
+        ]
+        
+        documents = []
+        metadatas = []
+        ids = []
+        
+        for doc_file in doc_files:
+            doc_path = docs_dir / doc_file
+            if doc_path.exists():
+                try:
+                    with open(doc_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    
+                    # Split into chunks (by sections or paragraphs)
+                    chunks = self._split_document(content, doc_file)
+                    
+                    for i, chunk in enumerate(chunks):
+                        documents.append(chunk)
+                        metadatas.append({
+                            'source': doc_file,
+                            'chunk_id': i,
+                            'type': 'documentation'
+                        })
+                        ids.append(f"{doc_file}_{i}")
+                    
+                    print(f"      ✓ Indexed {doc_file} ({len(chunks)} chunks)")
+                except Exception as e:
+                    print(f"      ⚠️  Could not index {doc_file}: {e}")
+        
+        if documents:
+            # Add to ChromaDB
+            self.doc_collection.add(
+                documents=documents,
+                metadatas=metadatas,
+                ids=ids
+            )
+            print(f"   ✅ Indexed {len(documents)} document chunks")
+    
+    def _split_document(self, content: str, filename: str) -> list:
+        """Split document into meaningful chunks"""
+        chunks = []
+        
+        # Split by markdown headers (##, ###, etc.)
+        lines = content.split('\n')
+        current_chunk = []
+        current_header = ""
+        
+        for line in lines:
+            # Check if line is a header
+            if line.startswith('#'):
+                # Save previous chunk if it exists
+                if current_chunk:
+                    chunk_text = '\n'.join(current_chunk).strip()
+                    if len(chunk_text) > 50:  # Only save meaningful chunks
+                        chunks.append(chunk_text)
+                
+                # Start new chunk with header
+                current_header = line
+                current_chunk = [line]
+            else:
+                current_chunk.append(line)
+            
+            # Also split on very long chunks (>1000 chars)
+            if len('\n'.join(current_chunk)) > 1000:
+                chunk_text = '\n'.join(current_chunk).strip()
+                if len(chunk_text) > 50:
+                    chunks.append(chunk_text)
+                current_chunk = []
+        
+        # Add final chunk
+        if current_chunk:
+            chunk_text = '\n'.join(current_chunk).strip()
+            if len(chunk_text) > 50:
+                chunks.append(chunk_text)
+        
+        return chunks if chunks else [content]  # Return full content if no good splits
+    
+    def _rag_search(self, query: str, n_results: int = 3) -> list:
+        """Search documentation using RAG"""
+        if not self.rag_enabled:
+            return []
+        
+        try:
+            results = self.doc_collection.query(
+                query_texts=[query],
+                n_results=n_results
+            )
+            
+            if results and results['documents']:
+                return [
+                    {
+                        'content': doc,
+                        'source': meta['source'],
+                        'distance': dist
+                    }
+                    for doc, meta, dist in zip(
+                        results['documents'][0],
+                        results['metadatas'][0],
+                        results['distances'][0]
+                    )
+                ]
+            return []
+        except Exception as e:
+            print(f"RAG search error: {e}")
+            return []
+    
+    def _build_rag_response(self, query: str, rag_results: list) -> str:
+        """Build a natural response from RAG search results"""
+        if not rag_results:
+            return ""
+        
+        # Combine top results
+        context_parts = []
+        for result in rag_results[:2]:  # Use top 2 results
+            content = result['content'].strip()
+            if len(content) > 500:
+                content = content[:500] + "..."
+            context_parts.append(content)
+        
+        combined_context = "\n\n".join(context_parts)
+        
+        # For simple queries, return the relevant documentation directly
+        if len(combined_context) < 800:
+            return combined_context
+        
+        # For longer context, try to extract the most relevant part
+        # Split into paragraphs and find most relevant
+        paragraphs = combined_context.split('\n\n')
+        query_lower = query.lower()
+        
+        scored_paragraphs = []
+        for para in paragraphs:
+            if len(para) < 30:
+                continue
+            # Simple relevance scoring
+            score = sum(1 for word in query_lower.split() if word in para.lower())
+            scored_paragraphs.append((score, para))
+        
+        if scored_paragraphs:
+            scored_paragraphs.sort(reverse=True, key=lambda x: x[0])
+            top_paras = [p[1] for p in scored_paragraphs[:3]]
+            return "\n\n".join(top_paras)
+        
+        return combined_context[:800] + "..."
     
     def chat(self, user_message: str, context: dict = None) -> dict:
         """
@@ -228,7 +429,22 @@ High-reputation agents get more jobs automatically!"""
         """
         user_message_lower = user_message.lower()
         
-        # Check knowledge base first (fast, accurate)
+        # 1. Try RAG search first (most accurate, uses actual documentation)
+        if self.rag_enabled:
+            rag_results = self._rag_search(user_message, n_results=2)
+            if rag_results and rag_results[0]['distance'] < 0.7:  # Good similarity match
+                # Build response from documentation
+                response_text = self._build_rag_response(user_message, rag_results)
+                if response_text:
+                    return {
+                        'response': response_text,
+                        'suggestions': self._generate_suggestions('general'),
+                        'confidence': 1.0 - rag_results[0]['distance'],
+                        'source': 'rag_documentation',
+                        'sources': [r['source'] for r in rag_results]
+                    }
+        
+        # 2. Check knowledge base templates (fast, accurate)
         best_match = self._find_best_match(user_message_lower)
         
         if best_match:
