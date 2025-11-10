@@ -31,13 +31,10 @@ except Exception as e:
     print(f"⚠️  ML validator failed, using legacy validator: {e}")
     validator = AIValidator()
 
-# Initialize AI assistant
+# Initialize AI assistant with RAG
 try:
-    # Temporarily disabled for faster demo startup
-    # ai_assistant = get_assistant(use_gpu=False)
-    # print("✅ AI Assistant initialized")
-    ai_assistant = None
-    print("ℹ️  AI Assistant disabled for fast demo startup")
+    ai_assistant = get_assistant(use_gpu=False)
+    print("✅ AI Assistant initialized with RAG-enhanced documentation search")
 except Exception as e:
     print(f"⚠️  AI Assistant initialization warning: {e}")
     ai_assistant = None

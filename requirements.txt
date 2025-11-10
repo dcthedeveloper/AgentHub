@@ -1,11 +1,12 @@
 numpy==1.26.4
-transformers==4.30.2
-torch==2.0.1
-scikit-learn==1.3.0
+scikit-learn==1.7.2
+scipy==1.16.3
 
 # ML Models for Quality Validation
-sentence-transformers==2.2.2
-# Provides: semantic similarity, skill matching, embeddings
+sentence-transformers==5.1.2
+transformers==4.57.1
+torch==2.9.0
+# Provides: semantic similarity, skill matching, embeddings, RAG semantic search
 
 # Web Application Dependencies
 flask==3.0.0
